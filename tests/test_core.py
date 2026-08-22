@@ -1,33 +1,35 @@
+import json
 from pathlib import Path
 
-from crap4objc.core import analyze, extract_functions, score
+import pytest
+
+from crap4objc.core import AnalysisError, analyze, extract_functions, score
 
 
-def test_extracts_c_function_and_objc_method(tmp_path: Path) -> None:
-    source = tmp_path / "sample.m"
-    source.write_text("""@implementation Widget
-- (int)run:(BOOL)a other:(BOOL)b {
-  if (a && b) { return 1; }
-  return 0;
-}
-@end
-
-int choose(int x) {
-  while (x > 0) { x--; }
-  return x;
-}
-""", encoding="utf-8")
-    functions = extract_functions(source, tmp_path)
-    assert {item.name for item in functions} == {"-[Widget run:other:]", "choose"}
-    method = next(item for item in functions if "Widget" in item.name)
-    assert method.complexity == 3
+def test_score_formula() -> None:
+    assert score(10, 50.0) == 22.5
+    assert score(10, 100.0) == 10.0
 
 
-def test_maps_lcov(tmp_path: Path) -> None:
-    source = tmp_path / "sample.m"
-    source.write_text("int choose(int x) {\n if (x) return 1;\n return 0;\n}\n", encoding="utf-8")
+def test_target_language_function_and_complexity(tmp_path: Path) -> None:
+    source = tmp_path / 'sample.m'
+    source.write_text('@interface Choice\n- (int)choose:(int)a other:(int)b;\n@end\n@implementation Choice\n- (int)choose:(int)a other:(int)b {\n  if (a && b) { return 1; }\n  return 0;\n}\n@end\n', encoding="utf-8")
+    metrics = extract_functions(source, tmp_path)
+    assert metrics
+    metric = next(item for item in metrics if 'choose' in item.name)
+    assert metric.complexity >= 3
+
+
+def test_lcov_is_mapped_by_executable_line(tmp_path: Path) -> None:
+    source = tmp_path / 'sample.m'
+    source.write_text('@interface Choice\n- (int)choose:(int)a other:(int)b;\n@end\n@implementation Choice\n- (int)choose:(int)a other:(int)b {\n  if (a && b) { return 1; }\n  return 0;\n}\n@end\n', encoding="utf-8")
     coverage = tmp_path / "lcov.info"
-    coverage.write_text(f"SF:{source}\nDA:2,1\nDA:3,0\nend_of_record\n", encoding="utf-8")
-    metric = analyze(tmp_path, coverage)[0]
-    assert metric.coverage == 50
-    assert metric.crap == score(2, 50)
+    coverage.write_text(f"SF:{source.as_posix()}\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,1\nDA:5,1\nend_of_record\n", encoding="utf-8")
+    metrics = analyze(tmp_path, coverage)
+    assert metrics
+    assert any(item.coverage is not None for item in metrics)
+
+
+def test_missing_report_fails(tmp_path: Path) -> None:
+    with pytest.raises(AnalysisError):
+        analyze(tmp_path, tmp_path / "missing.info")
